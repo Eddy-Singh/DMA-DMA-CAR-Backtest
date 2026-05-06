@@ -463,7 +463,7 @@ if run_btn:
 
     status_box.empty()
 
-    # ── Display Results ────────────────────────────────────────────────────────
+    # ── Display Results ──────────────────────────────────────────────
     df_trades = pd.DataFrame(trades).round(2)
     df_curve = pd.DataFrame(portfolio_history)
 
