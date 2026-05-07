@@ -554,9 +554,9 @@ if run_btn:
     if df_trades.empty or "Outcome" not in df_trades.columns:
         st.info("No trades were generated. The CAR filter (or other conditions) may be too strict for the selected date range and ticker pool.")
     else:
-        styled_trades = df_trades.style.applymap(
+        styled_trades = df_trades.style.map(
             lambda x: "color: #00d4aa" if x == "WIN" else ("color: #ffd166" if x == "OPEN" else "color: #ff6b6b"), subset=["Outcome"]
-        ).applymap(
+        ).map(
             lambda x: "color: #00d4aa" if isinstance(x, (int, float)) and x > 0 else ("color: #ff6b6b" if isinstance(x, (int, float)) and x < 0 else ""), subset=["PnL %", "PnL ₹"]
         ).format({"Invested ₹": "₹{:,.2f}", "Exit Value ₹": "₹{:,.2f}", "PnL ₹": "₹{:+,.2f}", "PnL %": "{:+.2f}%", "Entry Price": "₹{:,.2f}", "Exit Price": "₹{:,.2f}"})
 
