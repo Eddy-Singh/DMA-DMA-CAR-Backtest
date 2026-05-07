@@ -298,13 +298,22 @@ with st.sidebar:
     run_btn = st.button("▶ RUN PORTFOLIO BACKTEST")
 
 # ── Header ────────────────────────────────────────────────────────────────────
-st.markdown("""
+st.markdown(f"""
 <div class="header-banner">
-    <h1 style="margin:0;font-size:1.8rem;letter-spacing:.04em">📊 DMA CAR Portfolio Edition</h1>
-    <p style="margin:6px 0 0;color:#7d8590;font-size:.9rem">Nifty 250 · Dynamic Split Allocation · Auto-Compounding</p>
-    <p style="margin:8px 0 0;font-size:.78rem;color:#00d4aa;font-family:'Space Mono',monospace">
-        ENTRY: 110% × SMA200 &gt; Price &gt; SMA50 &gt; SMA100 &gt; SMA200
+    <h1 style="margin:0;font-size:2rem;letter-spacing:.04em">📈 DMA CAR Portfolio Backtester</h1>
+    <p style="margin:10px 0; color:#e6edf3; font-size:1.1rem; font-weight:500;">
+        A trend-following system designed to capture momentum in India's top 250 companies.
     </p>
+    <div style="background: rgba(0,212,170,0.1); border-left: 4px solid #00d4aa; padding: 15px; margin: 20px 0;">
+        <h4 style="margin-top:0; color:#00d4aa; font-family:'Space Mono';">The "Perfect Entry" Checklist</h4>
+        <p style="font-size:0.9rem; color:#7d8590; line-height:1.6;">
+            For the system to buy a stock, it must pass <b>four strict health checks</b> simultaneously:
+            <br>✅ <b>The Trend:</b> The 50-day average must be above the 100-day, which must be above the 200-day (Clear upward momentum).
+            <br>✅ <b>The Value:</b> The current price must be <i>higher</i> than the 50-day average (The stock is currently "hot").
+            <br>✅ <b>The Ceiling:</b> The price must <b>not</b> be more than 10% above the 200-day average (Prevents buying when the stock is over-extended or "too expensive").
+            <br>✅ <b>The Floor:</b> The price must stay above the 200-day average (Ensures we don't buy "falling knives").
+        </p>
+    </div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -561,3 +570,26 @@ if run_btn:
         ).format({"Invested ₹": "₹{:,.2f}", "Exit Value ₹": "₹{:,.2f}", "PnL ₹": "₹{:+,.2f}", "PnL %": "{:+.2f}%", "Entry Price": "₹{:,.2f}", "Exit Price": "₹{:,.2f}"})
 
         st.dataframe(styled_trades, use_container_width=True, height=400)
+
+# ── Glossary / Educational Section ──────────────────────────────────────────
+st.markdown("---")
+with st.expander("📖 New to Trading? Understanding the Abbreviations & Strategy"):
+    col_a, col_b = st.columns(2)
+
+    with col_a:
+        st.markdown("""
+        ### The Entry Logic Explained
+        The formula `110% × SMA200 > Price > SMA50 > SMA100 > SMA200` means:
+        - **Price > SMA50:** The stock is performing better than its recent 2-month average.
+        - **SMA50 > SMA100 > SMA200:** This is a "stacked" trend. It shows the stock is gaining strength across short, medium, and long-term horizons.
+        - **110% × SMA200 > Price:** We only buy if the price is within 10% of its long-term average. This is the **"Anti-FOMO"** rule—it stops us from "chasing" a stock that has already gone up too much.
+        """)
+
+    with col_b:
+        st.markdown("""
+        ### Key Terms
+        - **SMA (Simple Moving Average):** The average price over a set period (50, 100, or 200 days). 
+        - **Tranches:** Breaking your total investment into parts (Day 1 and Day 20) to reduce the risk of bad timing.
+        - **Averaging Down:** Using the **Reserve Fund** to buy more if the price drops -5% or -10% after our first entry.
+        - **Compounding:** Every time we hit our **6.28% profit target**, the original money PLUS the profit is put back into the "Cash Ready" pool for the next trade.
+        """)
