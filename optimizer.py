@@ -105,11 +105,10 @@ def run_backtest(
     sma_fast: int,            # e.g. 50
     sma_mid: int,             # e.g. 100
     sma_slow: int,            # e.g. 200
-    use_car: bool,
     starting_capital: float = 100_000.0,
 ) -> dict:
     """
-    Runs the full DMA-CAR backtest on the given date slice and returns
+    Runs the full DMA backtest on the given date slice and returns
     a dict of performance metrics.
     """
     df = df_close.copy()
@@ -124,10 +123,6 @@ def run_backtest(
         (sma_f > sma_m) &
         (sma_m > sma_s)
     )
-
-    if use_car:
-        car = _compute_car(df)
-        signals = signals & car
 
     valid = df[df.index >= pd.to_datetime(date_range[0])].index
     if len(valid) < 20:
@@ -217,33 +212,6 @@ def run_backtest(
     }
 
 
-def _compute_car(df_close: pd.DataFrame, window: int = 252, lookback: int = 10) -> pd.DataFrame:
-    result = pd.DataFrame(False, index=df_close.index,
-                          columns=df_close.columns)
-    for col in df_close.columns:
-        s = df_close[col].dropna()
-        n = len(s)
-        if n < window + lookback:
-            continue
-        vals = s.values.astype(np.float64)
-        prefix = np.concatenate([[0.0], np.cumsum(vals)])
-        cum_avg = np.full(n, np.nan)
-        for i in range(window - 1, n):
-            hp = (i - window + 1) + int(np.argmax(vals[i - window + 1: i + 1]))
-            cum_avg[i] = (prefix[i + 1] - prefix[hp]) / (i - hp + 1)
-        car = np.zeros(n, dtype=bool)
-        start_i = window + lookback - 2
-        for i in range(start_i, n):
-            p10 = vals[i - lookback + 1: i + 1]
-            c10 = cum_avg[i - lookback + 1: i + 1]
-            if np.any(np.isnan(c10)):
-                continue
-            if np.all(p10 > c10):
-                car[i] = True
-        result.loc[s.index, col] = car
-    return result
-
-
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 🔬 Optimizer Config")
@@ -267,17 +235,15 @@ with st.sidebar:
     st.caption("Set the min/max range Optuna will search.")
 
     profit_min, profit_max = st.slider(
-        "Profit Target % range",  1.0, 30.0, (3.0, 15.0), 0.5)
+        "Profit Target % range",  1.0, 30.0, (1.0, 8.0), 0.5)
     buffer_min, buffer_max = st.slider(
-        "SMA200 Buffer % range", 100, 130, (100, 120), 1)
+        "SMA200 Buffer % range", 115, 140, (115, 140), 1)
     fast_min,   fast_max = st.slider(
         "Fast SMA period range",   20,  80, (40,  60), 1)
     mid_min,    mid_max = st.slider(
         "Mid SMA period range",    60, 150, (80, 120), 1)
     slow_min,   slow_max = st.slider(
         "Slow SMA period range",  150, 300, (180, 220), 1)
-
-    use_car = st.checkbox("Include CAR Filter", value=True)
 
     st.markdown("### ⚡ Trials")
     n_trials = st.slider("Optuna trials", 30, 300, 100, 10,
@@ -348,7 +314,6 @@ if run_btn:
         result = run_backtest(
             df_close, in_dates,
             profit_pct, sma_buffer, sma_fast, sma_mid, sma_slow,
-            use_car=use_car,
         )
         return result["calmar"]
 
@@ -403,10 +368,10 @@ if run_btn:
     # ── 5. In-sample vs Out-of-sample comparison ──────────────────────────────
     st.markdown("### 📊 In-Sample vs Out-of-Sample Validation")
 
-    res_in = run_backtest(df_close, in_dates,  **{k: bp[k] for k in [
-                          "profit_pct", "sma_buffer", "sma_fast", "sma_mid", "sma_slow"]}, use_car=use_car)
+    res_in = run_backtest(df_close, in_dates, **{k: bp[k] for k in [
+                          "profit_pct", "sma_buffer", "sma_fast", "sma_mid", "sma_slow"]})
     res_out = run_backtest(df_close, out_dates, **{k: bp[k] for k in [
-                           "profit_pct", "sma_buffer", "sma_fast", "sma_mid", "sma_slow"]}, use_car=use_car)
+                           "profit_pct", "sma_buffer", "sma_fast", "sma_mid", "sma_slow"]})
 
     def _colour(v, good=0):
         return "green" if v > good else "red"
@@ -540,15 +505,15 @@ if run_btn:
         f"SMA200 Buffer  : {bp['sma_buffer']} %\n"
         f"Fast SMA period: {bp['sma_fast']}\n"
         f"Mid  SMA period: {bp['sma_mid']}\n"
-        f"Slow SMA period: {bp['sma_slow']}\n"
-        f"CAR Filter     : {'ON' if use_car else 'OFF'}",
+        f"Slow SMA period: {bp['sma_slow']}",
         language="text"
     )
 
     st.markdown("""
 <div class="warn-box">
 🔑 <strong>How to interpret results:</strong><br>
-• <strong>Out-of-sample Calmar &gt; 0.5</strong> → strategy has genuine edge, not just curve-fit<br>
+• For the 30-day class test window, a lower profit target (≈1–4%) yields more trades, making Win Rate and Sharpe statistically meaningful.<br>
+• Out-of-sample Calmar &gt; 0.5 → strategy has genuine edge, not just curve-fit<br>
 • <strong>Out-of-sample close to in-sample</strong> → parameters generalise well<br>
 • <strong>Out-of-sample much worse</strong> → overfitting; try widening search ranges or fewer parameters<br>
 • <strong>Parameter Importance chart</strong> → focus on what actually matters; ignore low-importance params

@@ -1,10 +1,10 @@
 """
-DMA DMA CAR Strategy Backtester — Nifty 250 (Portfolio Compounding Edition)
-===========================================================================
+DMA Strategy Backtester — Nifty 250 (Portfolio Compounding Edition)
+===================================================================
 Strategy Rules:
   ENTRY  : 110% × SMA200 > Price > SMA50 > SMA100 > SMA200
-  EXIT   : +6.28% profit target (or end of data)
-  CAPITAL: Tranche 1 & 2 logic. Available cash is always split evenly across 
+  EXIT   : profit target % (slider, default 3.5%) or end of period
+  CAPITAL: Tranche 1 & 2 logic. Available cash is always split evenly across
            ALL stocks signaling on that specific day. Profits are compounded.
 
 Run:
@@ -165,92 +165,7 @@ def fetch_market_data(tickers, start_date, end_date):
     return df_close.ffill()
 
 
-# ── CAR Filter ────────────────────────────────────────────────────────────────
-
-@st.cache_data(show_spinner=False, ttl=3600)
-def compute_car_signals(df_close, window=252, lookback=10):
-    """
-    Cumulative Average Reversal (CAR) filter.
-
-    For each stock on each date d:
-      1. Find the date of the 52-week high (rolling max over `window` days).
-      2. Compute the cumulative average of daily closes from that 52-week-high
-         date up to and including day d  →  cum_avg[d].
-      3. Repeat steps 1-2 for each of the last `lookback` days.
-      4. GREEN signal only when ALL of the following hold for those 10 days:
-            • close[i] > cum_avg[i]   (price above its own cumulative average)
-            • closes are strictly ascending  (close[i] > close[i-1])
-      5. If there are fewer than `lookback` days since the stock's 52-week high
-         (i.e. we cannot form 10 qualifying days), the stock is excluded (False).
-
-    Returns a boolean DataFrame with the same shape as df_close.
-    """
-    result = pd.DataFrame(False, index=df_close.index,
-                          columns=df_close.columns)
-
-    for col in df_close.columns:
-        s = df_close[col].dropna()
-        n = len(s)
-
-        # Need at least `window` days of history plus `lookback` days beyond
-        if n < window + lookback:
-            continue
-
-        vals = s.values.astype(np.float64)
-
-        # Pre-compute prefix sums for O(1) range-mean queries
-        prefix = np.empty(n + 1, dtype=np.float64)
-        prefix[0] = 0.0
-        np.cumsum(vals, out=prefix[1:])
-
-        # ── Per-day: rolling 52-week high position & cumulative average ──────
-        # high_pos[i]  = absolute index (within vals) of the 52-week high
-        #                as seen on day i
-        # cum_avg[i]   = mean(vals[high_pos[i] : i+1])
-        high_pos = np.empty(n, dtype=np.intp)
-        cum_avg = np.full(n, np.nan, dtype=np.float64)
-
-        for i in range(window - 1, n):
-            w_start = i - window + 1
-            rel_hp = int(np.argmax(vals[w_start: i + 1]))
-            hp = w_start + rel_hp
-            high_pos[i] = hp
-            length = i - hp + 1
-            cum_avg[i] = (prefix[i + 1] - prefix[hp]) / length
-
-        # ── CAR condition over the last `lookback` days ───────────────────
-        car = np.zeros(n, dtype=bool)
-
-        # Earliest day we can evaluate: need `window-1` days for the oldest
-        # of the 10 cum_avg values, plus `lookback-1` more days on top.
-        start_i = window - 1 + lookback - 1   # == window + lookback - 2
-
-        for i in range(start_i, n):
-            slice_start = i - lookback + 1     # inclusive
-            p10 = vals[slice_start: i + 1]    # shape (lookback,)
-            c10 = cum_avg[slice_start: i + 1]  # shape (lookback,)
-
-            # Skip if any cumulative average is still NaN
-            # (means fewer than `lookback` days have elapsed since 52wk high
-            #  for at least one of the 10 days)
-            if np.any(np.isnan(c10)):
-                continue
-
-            # Only condition: every close must be above its own cumulative average.
-            # If this holds for 10 consecutive days the running average is
-            # mathematically guaranteed to be ascending, so no second check needed.
-            if not np.all(p10 > c10):
-                continue
-
-            car[i] = True
-
-        # Map the computed boolean array back onto the full datetime index
-        result.loc[s.index, col] = car
-
-    return result
-
-
-# ── Sidebar ───────────────────────────────────────────────────────────────────
+# ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## ⚙️ Strategy Config")
     st.markdown("---")
@@ -273,22 +188,8 @@ with st.sidebar:
     use_avg10 = st.checkbox("Buy at –10% dip", value=True)
 
     st.markdown("### Entry & Exit")
-    profit_pct = st.slider("Profit Target (%)", 1.0, 20.0, 6.28, 0.01)
-    sma_buffer = st.slider("SMA200 Buffer (%)", 100, 130, 110, 1)
-
-    # ── CAR Filter ────────────────────────────────────────────────────────────
-    st.markdown("### 🔬 CAR Filter")
-    use_car_filter = st.checkbox(
-        "Enable CAR Filter",
-        value=False,
-        help=(
-            "Cumulative Average Reversal: from the 52-week high date, a running "
-            "average is tracked daily. A stock only gets a green signal when its "
-            "last 10 closes are ALL (a) above their respective cumulative averages "
-            "AND (b) strictly ascending. Stocks with fewer than 10 days of history "
-            "since their 52-week high are skipped."
-        ),
-    )
+    profit_pct = st.slider("Profit Target (%)", 1.0, 20.0, 3.5, 0.01)
+    sma_buffer = st.slider("SMA200 Buffer (%)", 100, 140, 125, 1)
 
     all_tickers = [t.replace(".NS", "") for t in NIFTY_250]
     chosen = st.multiselect("Select stocks (blank = All Nifty 250)",
@@ -310,7 +211,7 @@ st.markdown(f"""
             For the system to buy a stock, it must pass <b>four strict health checks</b> simultaneously:
             <br>✅ <b>The Trend:</b> The 50-day average must be above the 100-day, which must be above the 200-day (Clear upward momentum).
             <br>✅ <b>The Value:</b> The current price must be <i>higher</i> than the 50-day average (The stock is currently "hot").
-            <br>✅ <b>The Ceiling:</b> The price must <b>not</b> be more than 10% above the 200-day average (Prevents buying when the stock is over-extended or "too expensive").
+            <br>✅ <b>The Ceiling:</b> The price must stay within ~25% of its 200-day average (Relaxed anti-FOMO rule — allows stronger momentum names to enter).
             <br>✅ <b>The Floor:</b> The price must stay above the 200-day average (Ensures we don't buy "falling knives").
         </p>
     </div>
@@ -332,16 +233,6 @@ if run_btn:
               (df_close > sma50) & \
               (sma50 > sma100) & \
               (sma100 > sma200)
-
-    # ── Optionally apply CAR filter on top of existing signals ───────────────
-    if use_car_filter:
-        status_box.info(
-            "Computing CAR (Cumulative Average Reversal) signals… "
-            "This adds a few extra seconds."
-        )
-        car_signals = compute_car_signals(df_close)
-        # Only keep entries where BOTH the DMA condition AND the CAR condition hold
-        signals = signals & car_signals
 
     # 2. Setup Portfolio Timeline
     valid_dates = df_close[df_close.index >= pd.to_datetime(start_date)].index
@@ -392,7 +283,7 @@ if run_btn:
                     "Invested ₹": pos['total_cost'], "Exit Value ₹": current_val,
                     "PnL ₹": current_val - pos['total_cost'], "PnL %": pnl_pct * 100,
                     "Hold Days": (date - pos['entry_date']).days, "Outcome": "WIN",
-                    "Lots": 1 + pos['avg_downs']
+                    "Exit": "Target", "Lots": 1 + pos['avg_downs']
                 })
                 tickers_to_close.append(ticker)
                 continue
@@ -454,7 +345,7 @@ if run_btn:
             "Cash Ready": cash_for_entries, "Reserve": cash_reserve, "Open Positions": open_val
         })
 
-    # Wrap up open trades at end of simulation
+    # Wrap up open trades at end of simulation (period-end closeout)
     last_date = valid_dates[-1]
     for ticker, pos in active_positions.items():
         p = df_close.loc[last_date, ticker]
@@ -466,8 +357,9 @@ if run_btn:
             "Entry Price": pos['initial_price'], "Exit Price": p,
             "Invested ₹": pos['total_cost'], "Exit Value ₹": current_val,
             "PnL ₹": current_val - pos['total_cost'], "PnL %": pnl_pct * 100,
-            "Hold Days": (last_date - pos['entry_date']).days, "Outcome": "OPEN",
-            "Lots": 1 + pos['avg_downs']
+            "Hold Days": (last_date - pos['entry_date']).days,
+            "Outcome": "WIN" if pnl_pct >= 0 else "LOSS",
+            "Exit": "Period End", "Lots": 1 + pos['avg_downs']
         })
 
     status_box.empty()
@@ -478,20 +370,15 @@ if run_btn:
 
     # Metrics Calculations
     if not df_trades.empty:
-        closed_mask = df_trades["Outcome"].isin(["WIN", "LOSS"])
-        resolved_trades = df_trades[closed_mask]
+        resolved_trades = df_trades[df_trades["Outcome"].isin(["WIN", "LOSS"])]
         avg_hold_days = resolved_trades["Hold Days"].mean(
         ) if not resolved_trades.empty else 0
 
         wins = len(df_trades[df_trades["Outcome"] == "WIN"])
-        actual_losses = len(df_trades[df_trades["Outcome"] == "LOSS"])
-        # Open trades held for >= 120 days count as losses for this calculation
-        stale_opens = len(
-            df_trades[(df_trades["Outcome"] == "OPEN") & (df_trades["Hold Days"] >= 120)])
-
-        total_for_winrate = wins + actual_losses + stale_opens
-        win_rate = (wins / total_for_winrate *
-                    100) if total_for_winrate > 0 else 0.0
+        # All positions are now closed (target hit or period end),
+        # so win rate is simply wins over total trades.
+        win_rate = (wins / len(df_trades) *
+                    100) if len(df_trades) > 0 else 0.0
     else:
         win_rate = 0.0
         avg_hold_days = 0.0
@@ -511,11 +398,90 @@ if run_btn:
     m3.markdown(
         f'<div class="metric-card"><div class="metric-val {"green" if net_profit > 0 else "red"}">₹{net_profit:+,.0f}</div><div class="metric-lbl">Net Profit</div></div>', unsafe_allow_html=True)
     m4.markdown(
-        f'<div class="metric-card"><div class="metric-val {"green" if win_rate >= 50 else "yellow"}">{win_rate:.1f}%</div><div class="metric-lbl">Win Rate (120d adj)</div></div>', unsafe_allow_html=True)
+        f'<div class="metric-card"><div class="metric-val {"green" if win_rate >= 50 else "yellow"}">{win_rate:.1f}%</div><div class="metric-lbl">Win Rate</div></div>', unsafe_allow_html=True)
     m5.markdown(
         f'<div class="metric-card"><div class="metric-val {"green" if avg_hold_days < 30 else "yellow"}">{avg_hold_days:.1f}d</div><div class="metric-lbl">Avg Hold Time</div></div>', unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Project Performance Metrics (test period) ────────────────────
+    total_return = final_cap / initial_total_cap - 1.0
+    daily_ret = df_curve["Total Value"].pct_change().dropna()
+    n_years = len(df_curve) / 252.0
+    annual_return = (1.0 + total_return) ** (1.0 / n_years) - 1.0 \
+        if n_years > 0 else 0.0
+    annual_vol = float(daily_ret.std() * np.sqrt(252)) \
+        if len(daily_ret) > 1 else 0.0
+    sharpe_ratio = (annual_return / annual_vol) if annual_vol > 0 else 0.0
+
+    equity_vals = df_curve["Total Value"].to_numpy()
+    running_peak = np.maximum.accumulate(equity_vals)
+    dd_series = (equity_vals - running_peak) / running_peak
+    max_drawdown = float(abs(dd_series.min())) if dd_series.min() < 0 else 0.0
+    in_dd = dd_series < 0
+    dd_episodes = int((in_dd & ~np.concatenate(([False], in_dd[:-1]))).sum())
+
+    n_trades = len(df_trades)
+    profit_per_trade = float(df_trades["PnL ₹"].mean()) if n_trades else 0.0
+    best_trade = float(df_trades["PnL ₹"].max()) if n_trades else 0.0
+    worst_trade = float(df_trades["PnL ₹"].min()) if n_trades else 0.0
+    trades_per_week = n_trades / (len(df_curve) / 5.0) if len(df_curve) else 0.0
+    ret_to_dd = (annual_return / max_drawdown) if max_drawdown > 0 else 0.0
+
+    metrics_df = pd.DataFrame([
+        ("Annual Return",          f"{annual_return*100:+.2f}%",
+         "(final value / seed)^(252/days) − 1"),
+        ("Sharpe Ratio",           f"{sharpe_ratio:.2f}",
+         "annual return ÷ annual volatility (risk-free = 0)"),
+        ("Max Drawdown",           f"{max_drawdown*100:.2f}%",
+         "largest peak-to-trough % drop in equity"),
+        ("Win Rate",               f"{win_rate:.1f}%",
+         "profitable trades ÷ total trades"),
+        ("Annual Volatility",      f"{annual_vol*100:.2f}%",
+         "std(daily returns) × √252"),
+        ("Drawdown Patterns",      str(dd_episodes),
+         "count of separate peak→trough episodes"),
+        ("Number of Trades",       str(n_trades),
+         "positions closed in the test window"),
+        ("Average Holding Period", f"{avg_hold_days:.1f} days",
+         "mean(exit date − entry date)"),
+        ("Profit per Trade",       f"₹{profit_per_trade:+,.0f}",
+         "mean P&L ₹ across all trades"),
+        ("Return / Drawdown",      f"{ret_to_dd:.2f}",
+         "annual return ÷ max drawdown"),
+        ("Best Trade",             f"₹{best_trade:+,.0f}",
+         "max single-trade P&L"),
+        ("Worst Trade",            f"₹{worst_trade:+,.0f}",
+         "min single-trade P&L"),
+        ("Trades per Week",        f"{trades_per_week:.1f}",
+         "trades ÷ weeks in window"),
+    ], columns=["Metric", "Value", "Calculation"])
+
+    st.markdown("### 📊 Performance Metrics — Test Period")
+    st.dataframe(metrics_df, use_container_width=True)
+
+    col_dl1, col_dl2 = st.columns(2)
+    col_dl1.download_button(
+        "📥 Download Metrics CSV",
+        metrics_df.to_csv(index=False),
+        file_name="performance_metrics.csv",
+        mime="text/csv",
+    )
+    price_cols = [c for c in ticker_pool if c in df_close.columns]
+    price_csv = df_close.loc[valid_dates, price_cols]
+    col_dl2.download_button(
+        "📥 Download Asset Prices CSV",
+        price_csv.to_csv(),
+        file_name="portfolio_daily_closes.csv",
+        mime="text/csv",
+    )
+
+    if n_trades < 20:
+        st.caption(
+            f"⚠️ Small-sample note: only **{n_trades} trades** in this window. "
+            "Win Rate and Profit per Trade are statistically weak below ~20 trades — "
+            "cross-check with a long-horizon run before drawing conclusions."
+        )
 
     # ── Charts Row ─────────────────────────────────────────────────────────────
     c1, c2 = st.columns([2, 1])
@@ -561,7 +527,7 @@ if run_btn:
     # ── Trade Log ─────────────────────────────────────────────────────────────
     st.markdown("### 📋 Trade Log")
     if df_trades.empty or "Outcome" not in df_trades.columns:
-        st.info("No trades were generated. The CAR filter (or other conditions) may be too strict for the selected date range and ticker pool.")
+        st.info("No trades were generated. The entry conditions may be too strict for the selected date range and ticker pool.")
     else:
         styled_trades = df_trades.style.map(
             lambda x: "color: #00d4aa" if x == "WIN" else ("color: #ffd166" if x == "OPEN" else "color: #ff6b6b"), subset=["Outcome"]
@@ -591,5 +557,5 @@ with st.expander("📖 New to Trading? Understanding the Abbreviations & Strateg
         - **SMA (Simple Moving Average):** The average price over a set period (50, 100, or 200 days). 
         - **Tranches:** Breaking your total investment into parts (Day 1 and Day 20) to reduce the risk of bad timing.
         - **Averaging Down:** Using the **Reserve Fund** to buy more if the price drops -5% or -10% after our first entry.
-        - **Compounding:** Every time we hit our **6.28% profit target**, the original money PLUS the profit is put back into the "Cash Ready" pool for the next trade.
+        - **Compounding:** Every time we hit our **profit target**, the original money PLUS the profit is put back into the "Cash Ready" pool for the next trade.
         """)
